@@ -902,6 +902,87 @@ def _print_show_hint():
 
 
 @cli.command()
+@click.argument("tweet_id")
+@click.option("--max-depth", type=int, default=5, help="Max source chain depth to trace.")
+@structured_output_options
+@click.pass_context
+def source(ctx, tweet_id, max_depth, as_json, as_yaml):
+    # type: (Any, str, int, bool, bool) -> None
+    """Trace the original source of a tweet's media.
+
+    When a tweet uses media (video/photo) originally uploaded by another user,
+    Twitter shows a "From @username" attribution. This command traces the full
+    source chain and outputs the original tweet ID, user, and URL.
+
+    TWEET_ID is the numeric tweet ID or full URL.
+    """
+    compact = ctx.obj.get("compact", False)
+    tweet_id = _normalize_tweet_id(tweet_id)
+    config = load_config()
+    rich_output = use_rich_output(as_json=as_json, as_yaml=as_yaml, compact=compact)
+
+    try:
+        client = _get_client(config, quiet=not rich_output)
+    except (TwitterError, RuntimeError) as exc:
+        _exit_with_error(exc)
+
+    chain = []
+    current_id = tweet_id
+    for _ in range(max_depth):
+        try:
+            if rich_output:
+                console.print("🔗 Fetching tweet %s..." % current_id)
+            tweets = client.fetch_tweet_detail(current_id, count=1)
+        except (TwitterError, RuntimeError) as exc:
+            _exit_with_error(exc)
+
+        if not tweets or not tweets[0].media:
+            break
+
+        m = tweets[0].media[0]
+        src_id = m.source_status_id
+        if not src_id:
+            break
+
+        chain.append({
+            "from_tweet_id": current_id,
+            "source_status_id": src_id,
+            "source_user_id": m.source_user_id,
+            "source_user_screen_name": m.source_user_screen_name,
+        })
+        current_id = src_id
+
+    original_id = chain[-1]["source_status_id"] if chain else tweet_id
+    original_user = chain[-1]["source_user_screen_name"] if chain else (tweets[0].author.screen_name if tweets else None)
+
+    result = {
+        "input_tweet_id": tweet_id,
+        "is_original": len(chain) == 0,
+        "chain_length": len(chain),
+        "chain": chain,
+        "original_id": original_id,
+        "original_user": original_user,
+        "original_url": "https://x.com/%s/status/%s" % (original_user or "unknown", original_id),
+    }
+
+    if compact:
+        click.echo(json.dumps(result))
+    elif emit_structured(result, as_json=as_json, as_yaml=as_yaml):
+        return
+    else:
+        if chain:
+            for hop in chain:
+                console.print("  🔗 %s → @%s (%s)" % (
+                    hop["from_tweet_id"],
+                    hop["source_user_screen_name"] or "?",
+                    hop["source_status_id"],
+                ))
+            console.print("  ✅ Original: @%s / %s" % (original_user or "?", original_id))
+        else:
+            console.print("  ✅ This IS the original: @%s / %s" % (original_user or "?", original_id))
+
+
+@cli.command()
 @click.argument("index", type=click.IntRange(1))
 @click.option("--max", "-n", "max_count", type=int, default=None, help="Max replies to fetch.")
 @click.option("--full-text", is_flag=True, help="Show full reply text in table output.")
