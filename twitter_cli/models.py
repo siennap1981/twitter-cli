@@ -34,6 +34,9 @@ class TweetMedia:
     url: str
     width: Optional[int] = None
     height: Optional[int] = None
+    source_status_id: Optional[str] = None  # original tweet ID if media is from another tweet
+    source_user_id: Optional[str] = None  # original poster's user ID
+    source_user_screen_name: Optional[str] = None  # original poster's @handle
 
 
 @dataclass

@@ -38,6 +38,9 @@ def tweet_to_dict(tweet: Tweet) -> Dict[str, Any]:
                 "url": media.url,
                 "width": media.width,
                 "height": media.height,
+                "sourceStatusId": media.source_status_id,
+                "sourceUserId": media.source_user_id,
+                "sourceUserScreenName": media.source_user_screen_name,
             }
             for media in tweet.media
         ],
@@ -112,6 +115,9 @@ def tweet_from_dict(data: Dict[str, Any]) -> Tweet:
                 url=str(item.get("url") or ""),
                 width=_optional_int(item.get("width")),
                 height=_optional_int(item.get("height")),
+                source_status_id=_optional_str(item.get("sourceStatusId")),
+                source_user_id=_optional_str(item.get("sourceUserId")),
+                source_user_screen_name=_optional_str(item.get("sourceUserScreenName")),
             )
             for item in media_data
             if isinstance(item, dict)

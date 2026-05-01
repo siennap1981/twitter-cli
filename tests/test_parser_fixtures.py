@@ -26,6 +26,9 @@ def test_parse_home_timeline_fixture(fixture_loader) -> None:
     assert [tweet.id for tweet in tweets] == ["1", "20"]
     assert cursor == "cursor-bottom-1"
     assert tweets[0].media[0].type == "photo"
+    # Photo without source attribution should have None source fields
+    assert tweets[0].media[0].source_status_id is None
+    assert tweets[0].media[0].source_user_screen_name is None
     # note_tweet full text should be preferred over legacy.full_text for long tweets
     assert "Show More" in tweets[0].text
     assert tweets[0].text.startswith("Hello\nworld\n")
@@ -75,6 +78,10 @@ def test_parse_search_timeline_fixture_with_module_items(fixture_loader) -> None
     assert cursor == "search-cursor"
     assert tweets[0].media[0].type == "video"
     assert tweets[0].media[0].url == "https://video-high.mp4"
+    # Source attribution: media sourced from another tweet
+    assert tweets[0].media[0].source_status_id == "9998887776665554433"
+    assert tweets[0].media[0].source_user_id == "1112223334445556667"
+    assert tweets[0].media[0].source_user_screen_name == "original_poster"
 
 
 def test_parse_list_timeline_fixture_with_visibility_wrapper(fixture_loader) -> None:
