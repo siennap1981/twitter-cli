@@ -1205,28 +1205,81 @@ def _write_action(emoji, action_desc, client_method, tweet_id, as_json=False, as
     )
 
 
+@cli.command("upload-video")
+@click.argument("video_path", type=click.Path(exists=True))
+@structured_output_options
+@click.pass_context
+def upload_video_cmd(ctx, video_path, as_json, as_yaml):
+    # type: (Any, str, bool, bool) -> None
+    """Upload a video file and return the media_id.
+
+    VIDEO_PATH is the path to an MP4 file (H.264, AAC, max 140s, max 512MB).
+
+    Use the returned media_id with `twitter post --media-id`:
+
+    \b
+        twitter upload-video clip.mp4 --json
+        twitter post "My tweet" --media-id <media_id>
+    """
+    compact = ctx.obj.get("compact", False)
+    config = load_config()
+    rich_output = not _structured_mode(as_json=as_json, as_yaml=as_yaml)
+
+    def operation(client: TwitterClient) -> WritePayload:
+        if rich_output:
+            console.print("📤 Uploading video: %s" % video_path)
+        start = time.time()
+        media_id = client.upload_video(video_path)
+        elapsed = time.time() - start
+        if rich_output:
+            console.print("✅ Uploaded in %.1fs (media_id: %s)" % (elapsed, media_id))
+        return {"success": True, "action": "upload-video", "media_id": media_id, "file": video_path}
+
+    payload = _run_write_command(
+        as_json=as_json, as_yaml=as_yaml,
+        operation=operation,
+        progress_lines=["📤 Uploading video..."],
+        success_lines=["[green]✅ Video uploaded![/green]"],
+        error_details={"action": "upload-video", "file": video_path},
+    )
+    if payload:
+        if compact:
+            click.echo(json.dumps({"media_id": payload["media_id"], "file": video_path}))
+        elif not _structured_mode(as_json=as_json, as_yaml=as_yaml):
+            console.print("media_id: %s" % payload["media_id"])
+
+
 @cli.command()
 @click.argument("text")
 @click.option("--reply-to", "-r", default=None, help="Reply to this tweet ID.")
-@click.option("--image", "-i", "images", multiple=True, type=click.Path(exists=True), help="Attach image (up to 4). Repeatable.")
+@click.option("--image", "-i", "images", multiple=True, type=click.Path(exists=True),
+              help="Attach image (up to 4). Repeatable.")
+@click.option("--media-id", "media_ids", multiple=True,
+              help="Attach media by ID (from upload-video). Repeatable.")
 @structured_output_options
-def post(text, reply_to, images, as_json, as_yaml):
-    # type: (str, Optional[str], tuple, bool, bool) -> None
-    """Post a new tweet. TEXT is the tweet content.
+def post(text, reply_to, images, media_ids, as_json, as_yaml):
+    # type: (str, Optional[str], tuple, tuple, bool, bool) -> None
+    """Post a new tweet.
 
-    Attach images with --image / -i (up to 4):
+    TEXT is the tweet content. Attach images with --image / -i (up to 4):
 
     \b
-      twitter post "Hello!" --image photo.jpg
-      twitter post "Gallery" -i a.png -i b.png -i c.jpg
+        twitter post "Hello!" --image photo.jpg
+        twitter post "Gallery" -i a.png -i b.png -i c.jpg
+
+    Attach pre-uploaded video with --media-id:
+
+    \b
+        twitter post "Check this out!" --media-id 1234567890
     """
     normalized_reply_to = _normalize_tweet_id(reply_to) if reply_to else None
     action = "Replying to %s" % normalized_reply_to if normalized_reply_to else "Posting tweet"
     rich_output = not _structured_mode(as_json=as_json, as_yaml=as_yaml)
 
     def operation(client: TwitterClient) -> WritePayload:
-        media_ids = _upload_images(client, images, rich_output=rich_output)
-        tweet_id = client.create_tweet(text, reply_to_id=normalized_reply_to, media_ids=media_ids or None)
+        img_media_ids = _upload_images(client, images, rich_output=rich_output)
+        all_media_ids = list(media_ids) + img_media_ids
+        tweet_id = client.create_tweet(text, reply_to_id=normalized_reply_to, media_ids=all_media_ids or None)
         return {"success": True, "action": "post", "id": tweet_id, "url": "https://x.com/i/status/%s" % tweet_id}
 
     payload = _run_write_command(
