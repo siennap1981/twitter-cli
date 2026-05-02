@@ -62,10 +62,23 @@ def _extract_cursor(content):
 
 def _extract_media(legacy):
     # type: (Dict[str, Any]) -> List[TweetMedia]
-    """Extract media items from tweet legacy data."""
-    media = []  # type: List[TweetMedia]
+    """Extract media items from tweet legacy data, including source attribution.
+
+    When media (video/photo) is originally posted by another user, Twitter's API
+    includes ``source_status_id_str``, ``source_user_id_str``, and
+    ``additional_media_info.source_user`` on the media object.  These fields let
+    us trace the "From @username" attribution shown in the web UI.
+    """
+    media = [] # type: List[TweetMedia]
     for media_item in _deep_get(legacy, "extended_entities", "media") or []:
         media_type = media_item.get("type", "")
+        # ── Source attribution (works for all media types) ──
+        source_status_id = media_item.get("source_status_id_str") or None
+        source_user_id = media_item.get("source_user_id_str") or None
+        source_user_sn = _deep_get(
+            media_item, "additional_media_info", "source_user",
+            "user_results", "result", "legacy", "screen_name",
+        ) or None
         if media_type == "photo":
             media.append(
                 TweetMedia(
@@ -73,6 +86,9 @@ def _extract_media(legacy):
                     url=media_item.get("media_url_https", ""),
                     width=_deep_get(media_item, "original_info", "width"),
                     height=_deep_get(media_item, "original_info", "height"),
+                    source_status_id=source_status_id,
+                    source_user_id=source_user_id,
+                    source_user_screen_name=source_user_sn,
                 )
             )
         elif media_type in {"video", "animated_gif"}:
@@ -85,6 +101,9 @@ def _extract_media(legacy):
                     url=mp4_variants[0]["url"] if mp4_variants else media_item.get("media_url_https", ""),
                     width=_deep_get(media_item, "original_info", "width"),
                     height=_deep_get(media_item, "original_info", "height"),
+                    source_status_id=source_status_id,
+                    source_user_id=source_user_id,
+                    source_user_screen_name=source_user_sn,
                 )
             )
     return media

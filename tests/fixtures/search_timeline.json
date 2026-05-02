@@ -72,6 +72,19 @@
                                                 "url": "https://video-high.mp4"
                                               }
                                             ]
+                                          },
+                                          "source_status_id_str": "9998887776665554433",
+                                          "source_user_id_str": "1112223334445556667",
+                                          "additional_media_info": {
+                                            "source_user": {
+                                              "user_results": {
+                                                "result": {
+                                                  "legacy": {
+                                                    "screen_name": "original_poster"
+                                                  }
+                                                }
+                                              }
+                                            }
                                           }
                                         }
                                       ]

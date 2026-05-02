@@ -902,6 +902,87 @@ def _print_show_hint():
 
 
 @cli.command()
+@click.argument("tweet_id")
+@click.option("--max-depth", type=int, default=5, help="Max source chain depth to trace.")
+@structured_output_options
+@click.pass_context
+def source(ctx, tweet_id, max_depth, as_json, as_yaml):
+    # type: (Any, str, int, bool, bool) -> None
+    """Trace the original source of a tweet's media.
+
+    When a tweet uses media (video/photo) originally uploaded by another user,
+    Twitter shows a "From @username" attribution. This command traces the full
+    source chain and outputs the original tweet ID, user, and URL.
+
+    TWEET_ID is the numeric tweet ID or full URL.
+    """
+    compact = ctx.obj.get("compact", False)
+    tweet_id = _normalize_tweet_id(tweet_id)
+    config = load_config()
+    rich_output = use_rich_output(as_json=as_json, as_yaml=as_yaml, compact=compact)
+
+    try:
+        client = _get_client(config, quiet=not rich_output)
+    except (TwitterError, RuntimeError) as exc:
+        _exit_with_error(exc)
+
+    chain = []
+    current_id = tweet_id
+    for _ in range(max_depth):
+        try:
+            if rich_output:
+                console.print("🔗 Fetching tweet %s..." % current_id)
+            tweets = client.fetch_tweet_detail(current_id, count=1)
+        except (TwitterError, RuntimeError) as exc:
+            _exit_with_error(exc)
+
+        if not tweets or not tweets[0].media:
+            break
+
+        m = tweets[0].media[0]
+        src_id = m.source_status_id
+        if not src_id:
+            break
+
+        chain.append({
+            "from_tweet_id": current_id,
+            "source_status_id": src_id,
+            "source_user_id": m.source_user_id,
+            "source_user_screen_name": m.source_user_screen_name,
+        })
+        current_id = src_id
+
+    original_id = chain[-1]["source_status_id"] if chain else tweet_id
+    original_user = chain[-1]["source_user_screen_name"] if chain else (tweets[0].author.screen_name if tweets else None)
+
+    result = {
+        "input_tweet_id": tweet_id,
+        "is_original": len(chain) == 0,
+        "chain_length": len(chain),
+        "chain": chain,
+        "original_id": original_id,
+        "original_user": original_user,
+        "original_url": "https://x.com/%s/status/%s" % (original_user or "unknown", original_id),
+    }
+
+    if compact:
+        click.echo(json.dumps(result))
+    elif emit_structured(result, as_json=as_json, as_yaml=as_yaml):
+        return
+    else:
+        if chain:
+            for hop in chain:
+                console.print("  🔗 %s → @%s (%s)" % (
+                    hop["from_tweet_id"],
+                    hop["source_user_screen_name"] or "?",
+                    hop["source_status_id"],
+                ))
+            console.print("  ✅ Original: @%s / %s" % (original_user or "?", original_id))
+        else:
+            console.print("  ✅ This IS the original: @%s / %s" % (original_user or "?", original_id))
+
+
+@cli.command()
 @click.argument("index", type=click.IntRange(1))
 @click.option("--max", "-n", "max_count", type=int, default=None, help="Max replies to fetch.")
 @click.option("--full-text", is_flag=True, help="Show full reply text in table output.")
@@ -1124,28 +1205,81 @@ def _write_action(emoji, action_desc, client_method, tweet_id, as_json=False, as
     )
 
 
+@cli.command("upload-video")
+@click.argument("video_path", type=click.Path(exists=True))
+@structured_output_options
+@click.pass_context
+def upload_video_cmd(ctx, video_path, as_json, as_yaml):
+    # type: (Any, str, bool, bool) -> None
+    """Upload a video file and return the media_id.
+
+    VIDEO_PATH is the path to an MP4 file (H.264, AAC, max 140s, max 512MB).
+
+    Use the returned media_id with `twitter post --media-id`:
+
+    \b
+        twitter upload-video clip.mp4 --json
+        twitter post "My tweet" --media-id <media_id>
+    """
+    compact = ctx.obj.get("compact", False)
+    config = load_config()
+    rich_output = not _structured_mode(as_json=as_json, as_yaml=as_yaml)
+
+    def operation(client: TwitterClient) -> WritePayload:
+        if rich_output:
+            console.print("📤 Uploading video: %s" % video_path)
+        start = time.time()
+        media_id = client.upload_video(video_path)
+        elapsed = time.time() - start
+        if rich_output:
+            console.print("✅ Uploaded in %.1fs (media_id: %s)" % (elapsed, media_id))
+        return {"success": True, "action": "upload-video", "media_id": media_id, "file": video_path}
+
+    payload = _run_write_command(
+        as_json=as_json, as_yaml=as_yaml,
+        operation=operation,
+        progress_lines=["📤 Uploading video..."],
+        success_lines=["[green]✅ Video uploaded![/green]"],
+        error_details={"action": "upload-video", "file": video_path},
+    )
+    if payload:
+        if compact:
+            click.echo(json.dumps({"media_id": payload["media_id"], "file": video_path}))
+        elif not _structured_mode(as_json=as_json, as_yaml=as_yaml):
+            console.print("media_id: %s" % payload["media_id"])
+
+
 @cli.command()
 @click.argument("text")
 @click.option("--reply-to", "-r", default=None, help="Reply to this tweet ID.")
-@click.option("--image", "-i", "images", multiple=True, type=click.Path(exists=True), help="Attach image (up to 4). Repeatable.")
+@click.option("--image", "-i", "images", multiple=True, type=click.Path(exists=True),
+              help="Attach image (up to 4). Repeatable.")
+@click.option("--media-id", "media_ids", multiple=True,
+              help="Attach media by ID (from upload-video). Repeatable.")
 @structured_output_options
-def post(text, reply_to, images, as_json, as_yaml):
-    # type: (str, Optional[str], tuple, bool, bool) -> None
-    """Post a new tweet. TEXT is the tweet content.
+def post(text, reply_to, images, media_ids, as_json, as_yaml):
+    # type: (str, Optional[str], tuple, tuple, bool, bool) -> None
+    """Post a new tweet.
 
-    Attach images with --image / -i (up to 4):
+    TEXT is the tweet content. Attach images with --image / -i (up to 4):
 
     \b
-      twitter post "Hello!" --image photo.jpg
-      twitter post "Gallery" -i a.png -i b.png -i c.jpg
+        twitter post "Hello!" --image photo.jpg
+        twitter post "Gallery" -i a.png -i b.png -i c.jpg
+
+    Attach pre-uploaded video with --media-id:
+
+    \b
+        twitter post "Check this out!" --media-id 1234567890
     """
     normalized_reply_to = _normalize_tweet_id(reply_to) if reply_to else None
     action = "Replying to %s" % normalized_reply_to if normalized_reply_to else "Posting tweet"
     rich_output = not _structured_mode(as_json=as_json, as_yaml=as_yaml)
 
     def operation(client: TwitterClient) -> WritePayload:
-        media_ids = _upload_images(client, images, rich_output=rich_output)
-        tweet_id = client.create_tweet(text, reply_to_id=normalized_reply_to, media_ids=media_ids or None)
+        img_media_ids = _upload_images(client, images, rich_output=rich_output)
+        all_media_ids = list(media_ids) + img_media_ids
+        tweet_id = client.create_tweet(text, reply_to_id=normalized_reply_to, media_ids=all_media_ids or None)
         return {"success": True, "action": "post", "id": tweet_id, "url": "https://x.com/i/status/%s" % tweet_id}
 
     payload = _run_write_command(
